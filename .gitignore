@@ -1,0 +1,12 @@
+# Vault init output — contains root token and unseal keys
+vault-init.json
+
+# Plain Kubernetes Secrets — encrypt with kubeseal before committing
+# Commit the sealed-secret.yaml instead
+secret.yaml
+*-secret.yaml
+!sealed-secret.yaml
+!*-sealed-secret.yaml
+
+# Never commit the real pub-cert.pem replacement until fetched
+# (the placeholder in sealed-secrets/pub-cert.pem is safe to commit)
