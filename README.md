@@ -13,8 +13,10 @@ graph LR
     end
 
     subgraph ESO["External Secrets Operator"]
-        CSS[ClusterSecretStore]
+        CSS[ClusterSecretStore\nread-only]
+        CSS_PUSH[ClusterSecretStore\nvault-push]
         ES[ExternalSecret]
+        PS[PushSecret]
     end
 
     subgraph CertManager["cert-manager"]
@@ -37,6 +39,10 @@ graph LR
     ES -->|syncs every 1h| CSS
     ES -->|creates/updates| SECRET
 
+    SECRET -->|push via PushSecret| PS
+    PS -->|writes to| CSS_PUSH
+    CSS_PUSH -->|creates/updates secret in| KV
+
     ISSUER -->|signs via k8s auth| PKI
     CERT -->|requests| ISSUER
     CERT -->|creates/renews| TLS
@@ -58,23 +64,26 @@ graph LR
 ```
 .
 ├── argocd/
-│   ├── vault.yaml                    # ArgoCD app for Vault
-│   ├── external-secrets.yaml         # ArgoCD app for ESO
-│   └── cert-manager.yaml             # ArgoCD app for cert-manager
+│   ├── vault.yaml                         # ArgoCD app for Vault
+│   ├── external-secrets.yaml              # ArgoCD app for ESO
+│   └── cert-manager.yaml                  # ArgoCD app for cert-manager
 ├── vault/
-│   ├── values.yaml                   # Vault Helm values (HA Raft, 3 replicas)
-│   ├── init.sh                       # One-time init: unseal, enable engines, configure k8s auth
-│   └── add-app-role.sh               # Register a new app in Vault
+│   ├── values.yaml                        # Vault Helm values (HA Raft, 3 replicas)
+│   ├── init.sh                            # One-time init: unseal, enable engines, configure k8s auth
+│   └── add-app-role.sh                    # Register a new app in Vault
 ├── external-secrets/
-│   ├── values.yaml                   # ESO Helm values
-│   └── cluster-secret-store.yaml     # ClusterSecretStore pointing to Vault
+│   ├── values.yaml                        # ESO Helm values
+│   ├── cluster-secret-store.yaml          # ClusterSecretStore (read-only) for pulling secrets
+│   └── cluster-secret-store-push.yaml     # ClusterSecretStore (write) for pushing secrets
 ├── cert-manager/
-│   └── vault-issuer.yaml             # ClusterIssuer using Vault PKI
+│   └── vault-issuer.yaml                  # ClusterIssuer using Vault PKI
 └── examples/
     ├── app-secret/
-    │   └── external-secret.yaml      # ExternalSecret pulling from Vault KV
+    │   └── external-secret.yaml           # ExternalSecret pulling from Vault KV → K8s Secret
+    ├── push-secret/
+    │   └── push-secret.yaml               # PushSecret pushing K8s Secret → Vault KV
     └── tls-cert/
-        └── certificate.yaml          # Certificate issued by Vault PKI
+        └── certificate.yaml               # Certificate issued by Vault PKI
 ```
 
 ## How It Works
@@ -85,6 +94,15 @@ graph LR
 2. Create an `ExternalSecret` in the app namespace pointing to the key
 3. ESO authenticates to Vault using the `external-secrets` service account
 4. ESO syncs the secret into a Kubernetes `Secret` on a 1-hour interval
+
+### Push Secrets (K8s Secret → Vault KV)
+
+1. Create a Kubernetes Secret in the app namespace (manually, from CI, or via Sealed Secrets)
+2. Create a `PushSecret` referencing it — ESO uses the `vault-push` ClusterSecretStore
+3. ESO authenticates to Vault using the `external-secrets-push` service account (eso-push policy)
+4. ESO writes the secret keys to the Vault KV path on a 1-hour interval
+
+This is the reverse of ExternalSecret: the source of truth is the K8s Secret, and Vault is kept in sync.
 
 ### TLS Certificates (Vault PKI → cert-manager)
 
@@ -105,12 +123,15 @@ kubectl apply -f argocd/external-secrets.yaml
 chmod +x vault/init.sh
 ./vault/init.sh
 
-# Apply ClusterSecretStore and ClusterIssuer
+# Apply ClusterSecretStores and ClusterIssuer
 kubectl apply -f external-secrets/cluster-secret-store.yaml
+kubectl apply -f external-secrets/cluster-secret-store-push.yaml
 kubectl apply -f cert-manager/vault-issuer.yaml
 ```
 
 ## Add a New Application
+
+### Pull secrets from Vault (Vault → K8s Secret)
 
 ```bash
 # 1. Register the app in Vault (creates policy + k8s auth role)
@@ -123,6 +144,20 @@ vault kv put secret/<namespace>/<app-name>/config \
 
 # 3. Create an ExternalSecret in the app namespace (see examples/app-secret/)
 # 4. Create a Certificate if TLS is needed (see examples/tls-cert/)
+```
+
+### Push secrets from K8s to Vault (K8s Secret → Vault KV)
+
+```bash
+# 1. Create the K8s Secret in the app namespace
+kubectl create secret generic <app-name>-config \
+  --from-literal=db_password="..." \
+  --from-literal=api_key="..." \
+  -n <namespace>
+
+# 2. Apply a PushSecret (see examples/push-secret/)
+#    ESO will push the keys to secret/<namespace>/<app-name>/config in Vault
+kubectl apply -f examples/push-secret/push-secret.yaml
 ```
 
 ## Vault Auth Flow

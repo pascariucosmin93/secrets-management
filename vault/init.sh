@@ -91,6 +91,18 @@ vault policy write eso - <<'EOF'
 path "secret/data/*" {
   capabilities = ["read", "list"]
 }
+path "secret/metadata/*" {
+  capabilities = ["read", "list"]
+}
+EOF
+
+vault policy write eso-push - <<'EOF'
+path "secret/data/*" {
+  capabilities = ["create", "update"]
+}
+path "secret/metadata/*" {
+  capabilities = ["read", "list"]
+}
 EOF
 
 vault policy write pki-cert-manager - <<'EOF'
@@ -113,6 +125,12 @@ vault write auth/kubernetes/role/cert-manager \
   bound_service_account_names=cert-manager \
   bound_service_account_namespaces=cert-manager \
   policies=pki-cert-manager \
+  ttl=1h
+
+vault write auth/kubernetes/role/eso-push \
+  bound_service_account_names=external-secrets-push \
+  bound_service_account_namespaces=external-secrets \
+  policies=eso-push \
   ttl=1h
 
 echo "==> Done. Root token and unseal keys are in vault-init.json — store securely."
