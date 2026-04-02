@@ -1,0 +1,15 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cv-website-tls
+  namespace: cv
+spec:
+  secretName: cv-website-tls
+  issuerRef:
+    name: vault-issuer
+    kind: ClusterIssuer
+  commonName: cv.cosmin-lab.com
+  dnsNames:
+    - cv.cosmin-lab.com
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # renew 15 days before expiry
